@@ -1,0 +1,38 @@
+name: Expand CodeSeller source
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  expand:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and expand 148 source files
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import hashlib, zipfile
+          archive = Path('CodeSeller-source.zip')
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == '75ed259930242a4b9e5df0e417331c8e04bca2e4845671a69ef6aacbfa01b930'
+          with zipfile.ZipFile(archive) as z:
+              assert sum(not i.is_dir() for i in z.infolist()) == 148
+              for i in z.infolist():
+                  p = PurePosixPath(i.filename)
+                  assert not p.is_absolute() and '..' not in p.parts
+                  assert '.git' not in p.parts and '.github' not in p.parts
+                  assert (i.external_attr >> 16) & 0o170000 != 0o120000
+              z.extractall('.')
+          p = Path('README.md')
+          p.write_text(p.read_text() + '\n\n## Live website\n\nhttps://codeseller-studio.exmashana67.chatgpt.site/\n\nSource files are expanded in this repository. Original archives retain the source and Git history. Production database, uploaded products and secrets remain on Sites. GitHub Pages alone cannot run this dynamic application.\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Expand verified CodeSeller source'
+          git push origin HEAD:main
