@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import solc from 'solc';
+const source=fs.readFileSync('contracts/CodeSellerCheckout.sol','utf8');
+const input={language:'Solidity',sources:{'CodeSellerCheckout.sol':{content:source}},settings:{optimizer:{enabled:true,runs:200},evmVersion:'paris',outputSelection:{'*':{'*':['abi','evm.bytecode.object','evm.deployedBytecode.object','evm.deployedBytecode.immutableReferences']}}}};
+const out=JSON.parse(solc.compile(JSON.stringify(input)));
+for(const e of out.errors||[])console.error(e.formattedMessage);
+if(out.errors?.some(e=>e.severity==='error'))process.exit(1);
+const c=out.contracts['CodeSellerCheckout.sol'].CodeSellerCheckout;
+fs.writeFileSync('lib/checkout-artifact.json',JSON.stringify({abi:c.abi,bytecode:'0x'+c.evm.bytecode.object,runtime:'0x'+c.evm.deployedBytecode.object,immutableReferences:c.evm.deployedBytecode.immutableReferences},null,2)+'\n');
+console.log('Checkout compiled; bytecode size:',c.evm.bytecode.object.length/2);

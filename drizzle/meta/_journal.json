@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790713930636,
+      "tag": "0000_medical_reaper",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790714977324,
+      "tag": "0001_yellow_lizard",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790716948412,
+      "tag": "0002_lazy_expediter",
+      "breakpoints": true
+    }
+  ]
+}

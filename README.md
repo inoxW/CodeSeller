@@ -1,24 +1,26 @@
 # CodeSeller
+Wallet-authenticated ZIP marketplace. Buyers transfer the entire invoice amount directly to PLATFORM_FEE_WALLET. Native payments use sendTransaction with the invoice reference; ERC20 payments call the issuer token's transfer function, with no spending approval or marketplace contract.
 
-Complete source export of https://codeseller-studio.exmashana67.chatgpt.site/.
+Supported assets: ETH, BNB, POL, USDC on Ethereum/Polygon, USDT on Ethereum. Prices are in USDC; other assets receive a server-issued quote with a 15-minute sending window. A delayed mining/confirmation never voids an otherwise exact payment. No native BTC/SOL support.
 
-- `CodeSeller-source.zip`: all 148 tracked files, preserving their directory structure.
-- `CodeSeller-history.bundle`: the original Git repository with all 6 source commits.
-- Source revision: `4c58d0b218e5022b09b4efca12af379f5e1e3ea2`.
+Two independent RPCs verify the chain, finalized canonical receipt, exact authenticated sender/recipient, amount, token, transaction input and invoice creation time. ZIP access is server-gated until confirmation. A global unique transfer claim prevents reuse between purchases and payouts.
 
-## Restore source and history
+Each paid version-3 order creates a seller liability: gross less floor(gross / 10), in the original asset and using the seller address captured at checkout. Prior contract orders are retained for downloads but new invoices use direct payments.
 
-```bash
-git clone CodeSeller-history.bundle codeseller
-cd codeseller
-npm ci
-npm run dev
-```
+Weekly settlement starts Monday 00:00 UTC for the previous week. The platform owner prepares grouped payouts by seller/address/asset/network. Items are reserved atomically, with a unique order key. The owner signs each transfer in their wallet; no server private key, allowance or automatic withdrawal exists. A database authorization lock prevents simultaneous payout initiation. Submitted transaction hashes survive reload; finalized receipts are required before payout completion. If a wallet tab crashes while authorizing, resume by entering the transaction hash, rather than sending a second payment. Proceeds due to the same platform wallet are marked retained, with no redundant self-transfer.
 
-Alternatively extract `CodeSeller-source.zip`. Requirements: Node.js 22.13 or newer.
+Private publication preserves the current audience. No real funds were moved during testing.
 
-The source includes frontend, server API routes, database schema and migrations, smart contract, tests, sample ZIP products, configuration and dependency lockfile. See the original README inside the archive for payment behavior.
+Validation:
+- node --experimental-strip-types tests/direct.test.mjs (actual local native/ERC20 transfers, proofs, 90/10 balances and weekly cutoff)
+- python tests/payout-db.test.py (migrations, atomic reservation, concurrent authorization, replay constraints)
+- npx tsc --noEmit
 
-Production D1 rows, R2 uploaded products, runtime secrets and hosting are separate from the source repository and are not migrated by these archives. External deployment requires configuring D1 and R2; the starter database ID is a placeholder.
+Wallet API references: https://viem.sh/docs/actions/wallet/sendTransaction and https://viem.sh/docs/contract/writeContract.
 
-The live website continues to run on its existing hosting. The repository currently stores complete source and history as archives, not an expanded source tree.
+
+## Live website
+
+https://codeseller-studio.exmashana67.chatgpt.site/
+
+Source files are expanded in this repository. Original archives retain the source and Git history. Production database, uploaded products and secrets remain on Sites. GitHub Pages alone cannot run this dynamic application.

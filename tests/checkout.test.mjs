@@ -1,0 +1,52 @@
+process.on('uncaughtException',e=>{let c=e;for(let i=0;c&&i<5;i++,c=c.cause)console.error(c.name,c.shortMessage||c.details||String(c.message).slice(0,180));process.exit(1);});
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import ganache from 'ganache';
+import solc from 'solc';
+import {createPublicClient,createWalletClient,custom,zeroAddress,keccak256,encodeAbiParameters,parseAbiParameters,decodeEventLog,encodeEventTopics,encodeAbiParameters as encodeArgs} from 'viem';
+import {privateKeyToAccount} from 'viem/accounts';
+import artifact from '../lib/checkout-artifact.json' with {type:'json'};
+import {contractCodeMatches,quoteUnits,splitReceiptMatches} from '../lib/split-proof.ts';
+import {challengeMessage,validSignature,digest,cookieValue} from '../lib/wallet-proof.ts';
+const provider=ganache.provider({logging:{quiet:true},wallet:{deterministic:true,totalAccounts:5},chain:{chainId:137}});
+const testProvider={request:async({method,params})=>{const normalized=method==='wallet_sendTransaction'?'eth_sendTransaction':method;if(normalized==='eth_sendTransaction'&&!params[0].gas){params=[{...params[0],gas:await provider.request({method:'eth_estimateGas',params:[params[0]]})}];}return provider.request({method:normalized,params});}};
+const publicClient=createPublicClient({transport:custom(testProvider)});
+const accounts=await publicClient.request({method:'eth_accounts'});
+const [buyer,seller,platform,other]=accounts;
+const wallet=(account)=>createWalletClient({account,transport:custom(testProvider)});
+const native=(id,sellerAddress=seller,amount=1000n,token=zeroAddress,expiry=deadline)=>wallet(buyer).writeContract({chain:null,address:checkout,abi:artifact.abi,functionName:'pay',args:[id,sellerAddress,token,amount,expiry],value:token===zeroAddress?amount:0n});
+async function receipt(hash){return publicClient.waitForTransactionReceipt({hash,pollingInterval:1});}
+let checks=0;const check=(message,fn)=>{fn();checks++;console.log('PASS:',message);};
+try{
+ const deploy=await wallet(platform).deployContract({chain:null,abi:artifact.abi,bytecode:artifact.bytecode,args:[platform,[]]});const deployed=await receipt(deploy);globalThis.checkout=deployed.contractAddress;
+ const code=await publicClient.getCode({address:checkout});check('deployed code matches reviewed artifact',()=>assert.equal(contractCodeMatches(code),true));
+ const latest=await publicClient.getBlock();globalThis.deadline=latest.timestamp+900n;
+ const id=keccak256(new TextEncoder().encode('native-invoice'));
+ const beforeSeller=await publicClient.getBalance({address:seller}),beforePlatform=await publicClient.getBalance({address:platform});
+ const paid=await receipt(await native(id));
+ assert.equal(await publicClient.getBalance({address:seller})-beforeSeller,900n);assert.equal(await publicClient.getBalance({address:platform})-beforePlatform,100n);console.log('PASS: native split 900 / 100');checks++;
+ const event=decodeEventLog({abi:artifact.abi,data:paid.logs[0].data,topics:paid.logs[0].topics});check('purchase event records actual split',()=>{assert.equal(event.args.feeAmount,100n);assert.equal(event.args.sellerAmount,900n);});
+ await assert.rejects(native(id));console.log('PASS: duplicate payment rejected');checks++;
+ const frontId=keccak256(new TextEncoder().encode('front-run-isolation'));
+ await receipt(await wallet(other).writeContract({chain:null,address:checkout,abi:artifact.abi,functionName:'pay',args:[frontId,other,zeroAddress,10n,deadline],value:10n}));
+ await receipt(await native(frontId));console.log('PASS: another wallet cannot reserve buyer invoice');checks++;
+ await assert.rejects(native(keccak256(new TextEncoder().encode('expired')),seller,1000n,zeroAddress,1n));console.log('PASS: expired payment rejected');checks++;
+ const mock=`// SPDX-License-Identifier: MIT\npragma solidity 0.8.28; contract MockToken { mapping(address=>uint256) public balanceOf; mapping(address=>mapping(address=>uint256)) public allowance; function mint(address a,uint256 n) external {balanceOf[a]+=n;} function approve(address s,uint256 n) external returns(bool){allowance[msg.sender][s]=n;return true;} function transfer(address to,uint256 n) external returns(bool){balanceOf[msg.sender]-=n;balanceOf[to]+=n;return true;} function transferFrom(address f,address t,uint256 n) external returns(bool){allowance[f][msg.sender]-=n;balanceOf[f]-=n;balanceOf[t]+=n;return true;} }`;
+ const compiled=JSON.parse(solc.compile(JSON.stringify({language:'Solidity',sources:{'Mock.sol':{content:mock}},settings:{evmVersion:'paris',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}}))).contracts['Mock.sol'].MockToken;
+ const token=(await receipt(await wallet(buyer).deployContract({chain:null,abi:compiled.abi,bytecode:'0x'+compiled.evm.bytecode.object}))).contractAddress;
+ const tokenCheckout=(await receipt(await wallet(platform).deployContract({chain:null,abi:artifact.abi,bytecode:artifact.bytecode,args:[platform,[token]]}))).contractAddress;
+ await receipt(await wallet(buyer).writeContract({chain:null,address:token,abi:compiled.abi,functionName:'mint',args:[buyer,1000n]}));
+ await receipt(await wallet(buyer).writeContract({chain:null,address:token,abi:compiled.abi,functionName:'approve',args:[tokenCheckout,1000n]}));
+ await receipt(await wallet(buyer).writeContract({chain:null,address:tokenCheckout,abi:artifact.abi,functionName:'pay',args:[keccak256(new TextEncoder().encode('token')),seller,token,1000n,deadline]}));
+ const tokenBalance=address=>publicClient.readContract({address:token,abi:compiled.abi,functionName:'balanceOf',args:[address]});assert.equal(await tokenBalance(seller),900n);assert.equal(await tokenBalance(platform),100n);assert.equal(await tokenBalance(tokenCheckout),0n);console.log('PASS: ERC20 splits 900 / 100 and retains zero funds');checks++;
+ // Verifier requires the immutable checkout's exact order/buyer/token/split tuple.
+ const rawReceipt={status:'0x1',transactionHash:paid.transactionHash,blockNumber:'0x'+paid.blockNumber.toString(16),blockHash:paid.blockHash,logs:paid.logs};
+ const mined=await publicClient.getBlock({blockNumber:paid.blockNumber});const block={number:'0x'+mined.number.toString(16),hash:mined.hash,timestamp:'0x'+mined.timestamp.toString(16)};
+ const order={buyer:'wallet:'+buyer,wallet:seller,contract:checkout,token:zeroAddress,amount_raw:'1000',order_hash:id,deadline:Number(deadline),created:new Date((Number(mined.timestamp)-1)*1000).toISOString()};
+ check('server accepts exact finalized split',()=>assert.equal(splitReceiptMatches(rawReceipt,block,block,order,paid.transactionHash),true));
+ for(const [label,patch] of [['wrong buyer',{buyer:'wallet:'+other}],['wrong seller',{wallet:other}],['wrong amount',{amount_raw:'1001'}],['wrong order',{order_hash:frontId}],['wrong contract',{contract:tokenCheckout}],['wrong token',{token}],['wrong deadline',{deadline:Number(deadline)+1}]])check(label+' rejected',()=>assert.equal(splitReceiptMatches(rawReceipt,block,block,{...order,...patch},paid.transactionHash),false));
+ check('quote rounding is exact and never undercharges',()=>assert.equal(quoteUnits(1900,18,100000000n,200000000000n),9500000000000000n));
+ const signer=privateKeyToAccount('0x'+'11'.repeat(32)),wrong=privateKeyToAccount('0x'+'22'.repeat(32));const message=challengeMessage(signer.address,'abcdef0123456789',Date.now()+300000),signature=await signer.signMessage({message});assert.equal(await validSignature(message,signer.address,signature),true);assert.equal(await validSignature(message,wrong.address,signature),false);assert.equal(await validSignature(message+'x',signer.address,signature),false);console.log('PASS: wallet signature bound to signer and exact challenge');checks++;
+ assert.notEqual(await digest('secret-session'), 'secret-session');assert.equal(cookieValue('foo=x; cs_wallet_session=abc','cs_wallet_session'),'abc');console.log('PASS: session hashing and cookie parsing');checks++;
+ console.log('Validation completed:',checks,'checks; no real funds used');
+}finally{await provider.disconnect();}

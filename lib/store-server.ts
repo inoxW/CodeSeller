@@ -1,0 +1,12 @@
+import { env } from 'cloudflare:workers';
+import { walletIdentity } from './wallet-auth';
+export class StoreError extends Error{constructor(message:string,public status=400){super(message);}}
+export function db(){if(!env.DB)throw new StoreError('Сховище тимчасово недоступне.',503);return env.DB;}
+export function bucket(){if(!env.BUCKET)throw new StoreError('Файлове сховище тимчасово недоступне.',503);return env.BUCKET;}
+export const identity=walletIdentity;
+export function sameOrigin(req:Request){if(req.headers.get('origin')!==new URL(req.url).origin)throw new StoreError('Недозволений запит.',403);}
+export function errorResponse(e:unknown){if(e instanceof StoreError)return Response.json({error:e.message},{status:e.status,headers:{'Cache-Control':'no-store'}});console.error('CodeSeller store failure',e instanceof Error?e.message:'unknown');return Response.json({error:'Сервіс тимчасово недоступний. Спробуйте ще раз.'},{status:503,headers:{'Cache-Control':'no-store'}});}
+export type ProductRow={id:string;owner:string;name:string;description:string;price_cents:number;wallet:string;category:string;stack:string;version:string;color:string;file_key:string;file_name:string;size:number;created:string;archived:number};
+export type OrderRow={id:string;buyer:string;seller:string;product_id:string;name:string;price_cents:number;amount_units:number;wallet:string;email:string;file_key:string;file_name:string;status:string;tx_hash:string|null;license_key:string|null;created:string;paid_at:string|null;last_check:number;payment_version:number;asset:string|null;chain_id:number|null;contract:string|null;token:string|null;amount_raw:string|null;order_hash:string|null;deadline:number|null;fee_wallet:string|null;payout_due:string|null};
+export function productView(p:ProductRow,userId?:string){return {id:p.id,name:p.name,description:p.description,price:p.price_cents/100,wallet:p.wallet,category:p.category,stack:p.stack,version:p.version,color:p.color,fileName:p.file_name,size:p.size,created:p.created,owned:p.owner===userId};}
+export function orderView(o:OrderRow){return {id:o.id,productId:o.product_id,name:o.name,price:o.price_cents/100,email:o.email,key:o.license_key||'',created:o.created,status:o.status,wallet:o.wallet,amountUnits:o.amount_units,txHash:o.tx_hash,fileName:o.file_name,paidAt:o.paid_at,paymentVersion:o.payment_version,asset:o.asset,chainId:o.chain_id,contract:o.contract,token:o.token,amountRaw:o.amount_raw,orderHash:o.order_hash,deadline:o.deadline,feeWallet:o.fee_wallet,payoutDue:o.payout_due};}
